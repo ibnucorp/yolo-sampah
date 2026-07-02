@@ -85,7 +85,7 @@
                 tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/');
                 
                 // Memuat model .tflite langsung (Ganti path sesuai file Anda, misal 'best.tflite')
-                model = await tflite.loadTFLiteModel('./best.tflite'); 
+                model = await tflite.loadTFLiteModel('https://raw.githubusercontent.com/ibnucorp/yolo-sampah/main/best.tflite'); 
                 console.log("Model Yolov8-nano berhasil dimuat!");
                 toggleBtn.disabled = false;
                 toggleBtn.textContent = "Mulai Deteksi";
