@@ -23,7 +23,7 @@
 </head>
 <body>
 
-    <h2>♻️ Sobat TrashifyML (Client-Side Realtime)</h2>
+    <h2>Sobat Sampah</h2>
 
     <div class="container">
         <div class="panel">
@@ -85,7 +85,7 @@
                 tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/');
                 
                 // Memuat model .tflite langsung (Ganti path sesuai file Anda, misal 'best.tflite')
-                model = await tflite.loadTFLiteModel('best.tflite'); 
+                model = await tflite.loadTFLiteModel('./best.tflite'); 
                 console.log("Model Yolov8-nano berhasil dimuat!");
                 toggleBtn.disabled = false;
                 toggleBtn.textContent = "Mulai Deteksi";
