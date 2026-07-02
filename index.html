@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrashifyML Client-Side</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f4f4f9; margin: 0; padding: 20px; }
+        .container { display: flex; gap: 20px; max-width: 1300px; width: 100%; justify-content: center; flex-wrap: wrap; }
+        .panel { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; flex-direction: column; align-items: center; position: relative;}
+        video, canvas { width: 640px; height: 640px; border-radius: 8px; object-fit: cover; }
+        video { background: #000; }
+        canvas { position: absolute; top: 75px; left: 20px; z-index: 10; pointer-events: none; }
+        .right-panel canvas { position: static; background: #000; }
+        button { margin: 15px 0; padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; }
+        button.active { background: #dc3545; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+
+    <h2>♻️ Sobat TrashifyML (Client-Side Realtime)</h2>
+
+    <div class="container">
+        <div class="panel">
+            <h3>Camera Input</h3>
+            <video id="webcam" autoplay playsinline muted></video>
+            <canvas id="overlayCanvas" width="640" height="640"></canvas> 
+            <button id="toggleBtn">Mulai Deteksi</button>
+        </div>
+
+        <div class="panel right-panel">
+            <h3>Detection Output</h3>
+            <table id="resultTable">
+                <thead>
+                    <tr>
+                        <th>Jenis Sampah</th>
+                        <th>Confidence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const overlayCanvas = document.getElementById('overlayCanvas');
+        const ctx = overlayCanvas.getContext('2d');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const tbody = document.querySelector('#resultTable tbody');
+
+        let isDetecting = false;
+        let model = null;
+        let animationId = null;
+
+        // Parameter YOLOv8 LiteRT
+        const inputSize = 640;
+        const confThreshold = 0.50; 
+        const iouThreshold = 0.45;  
+        
+        const classes = ["Botol Teh pucuk", "Bungkus Paket", "Bungkus Tisu", "Eskrim", "Hello Panda Merah", "Hello Panda Pink", "Kertas", "Oreo", "Plastik", "Plastik bening", "Stela", "Tisu"];
+        const colors = classes.map(() => `hsl(${Math.random() * 360}, 100%, 50%)`);
+
+        // 1. Setup Kamera
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: inputSize }, height: { ideal: inputSize }, facingMode: "environment" }
+            });
+            video.srcObject = stream;
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => resolve(video);
+            });
+        }
+
+        // 2. Load Model LiteRT (.tflite)
+        async function loadModel() {
+            try {
+                // Set path WASM agar eksekusi di browser cepat menggunakan CPU/WebGpu bawaan
+                tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/');
+                
+                // Memuat model .tflite langsung (Ganti path sesuai file Anda, misal 'best.tflite')
+                model = await tflite.loadTFLiteModel('best.tflite'); 
+                console.log("Model Yolov8-nano berhasil dimuat!");
+                toggleBtn.disabled = false;
+                toggleBtn.textContent = "Mulai Deteksi";
+            } catch (error) {
+                console.error("Gagal memuat model Yolov8-nano:", error);
+                alert("Gagal memuat model. Periksa path file '.tflite' Anda.");
+            }
+        }
+
+        // 3. Loop Eksekusi Real-time
+        async function detectFrame() {
+            if (!isDetecting) return;
+
+            tf.engine().startScope(); 
+
+            // Pre-processing gambar dari video HTML5
+            const tfImg = tf.browser.fromPixels(video);
+            const resized = tf.image.resizeBilinear(tfImg, [inputSize, inputSize]);
+            const normalized = resized.div(255.0).expandDims(0); // [1, 640, 640, 3]
+
+            // Inferensi Menggunakan LiteRT Engine
+            const outputTensor = model.predict(normalized);
+            
+            // Proses Output Tensor YOLOv8 (Format output LiteRT sama dengan TFJS)
+            const res = processOutput(outputTensor);
+            
+            // Render hasil
+            drawResults(res.boxes, res.scores, res.classIndices);
+
+            tf.engine().endScope();
+
+            animationId = requestAnimationFrame(detectFrame);
+        }
+
+        // 4. Logika Ekstraksi Tensor LiteRT -> Bounding Box
+        function processOutput(tensor) {
+            const squeeze = tensor.squeeze();
+            const transpose = squeeze.transpose();
+
+            const boxes = tf.tidy(() => {
+                const xc = transpose.slice([0, 0], [-1, 1]);
+                const yc = transpose.slice([0, 1], [-1, 1]);
+                const w = transpose.slice([0, 2], [-1, 1]);
+                const h = transpose.slice([0, 3], [-1, 1]);
+
+                const x1 = tf.sub(xc, tf.div(w, 2));
+                const y1 = tf.sub(yc, tf.div(h, 2));
+                const x2 = tf.add(xc, tf.div(w, 2));
+                const y2 = tf.add(yc, tf.div(h, 2));
+
+                return tf.concat([y1, x1, y2, x2], 1); 
+            });
+
+            const rawScores = transpose.slice([0, 4], [-1, classes.length]);
+            const maxScores = rawScores.max(1);
+            const argMax = rawScores.argMax(1);
+
+            const nmsIndex = tf.image.nonMaxSuppression(boxes, maxScores, 20, iouThreshold, confThreshold);
+            
+            const finalBoxes = boxes.gather(nmsIndex).arraySync();
+            const finalScores = maxScores.gather(nmsIndex).arraySync();
+            const finalClasses = argMax.gather(nmsIndex).arraySync();
+
+            return { boxes: finalBoxes, scores: finalScores, classIndices: finalClasses };
+        }
+
+        // 5. Render Bounding Box dan Tabel (Tampilan Tetap)
+        function drawResults(boxes, scores, classIndices) {
+            ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            tbody.innerHTML = ""; 
+
+            if (boxes.length === 0) {
+                tbody.innerHTML = "<tr><td colspan='2' style='text-align:center;'>Tidak ada sampah terdeteksi</td></tr>";
+                return;
+            }
+
+            boxes.forEach((box, i) => {
+                const [y1, x1, y2, x2] = box;
+                const width = x2 - x1;
+                const height = y2 - y1;
+                const classIndex = classIndices[i];
+                const className = classes[classIndex];
+                const score = (scores[i] * 100).toFixed(1);
+                const color = colors[classIndex];
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 4;
+                ctx.strokeRect(x1, y1, width, height);
+
+                ctx.fillStyle = color;
+                ctx.fillRect(x1, y1 - 25, ctx.measureText(className).width + 50, 25);
+                ctx.fillStyle = "white";
+                ctx.font = "18px Arial";
+                ctx.fillText(`${className} ${score}%`, x1 + 5, y1 - 5);
+
+                tbody.innerHTML += `
+                    <tr>
+                        <td><strong>${className}</strong></td>
+                        <td>${score}%</td>
+                    </tr>
+                `;
+            });
+        }
+
+        // 6. Kontrol Tombol
+        toggleBtn.disabled = true; 
+        toggleBtn.textContent = "Loading LiteRT Model...";
+
+        toggleBtn.addEventListener('click', () => {
+            isDetecting = !isDetecting;
+            if (isDetecting) {
+                toggleBtn.textContent = "Hentikan Deteksi";
+                toggleBtn.classList.add('active');
+                detectFrame();
+            } else {
+                toggleBtn.textContent = "Mulai Deteksi";
+                toggleBtn.classList.remove('active');
+                cancelAnimationFrame(animationId);
+                ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height); 
+                tbody.innerHTML = ""; 
+            }
+        });
+
+        // Inisialisasi
+        setupCamera().then(() => {
+            loadModel();
+        });
+    </script>
+</body>
+</html>
