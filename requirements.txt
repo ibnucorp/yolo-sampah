@@ -1,5 +1,5 @@
+os
 streamlit
+pandas
 ultralytics
-opencv-python-headless
-streamlit-webrtc
-av
+PIL
